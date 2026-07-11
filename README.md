@@ -4,7 +4,7 @@
 
 Drop a folder of messy emails, PDFs, and notes in — get back a clean daily digest telling you what each document is, how urgent it is, and what to do about it.
 
-> Built by Ray [Surname] — 18 years in enterprise infrastructure & operations (Adobe, Qualcomm). AWS Certified Solutions Architect & Developer.
+> Built by Ray O'Mahony — 18 years in enterprise infrastructure & operations (Adobe, Qualcomm). AWS Certified Solutions Architect & Developer.
 
 ---
 
@@ -31,7 +31,7 @@ Then it compiles everything into a single **daily digest** (Markdown or HTML) yo
 ## Quick start
 
 ```bash
-git clone https://github.com/YOURUSERNAME/inbox-to-action.git
+git clone https://github.com/ray-omahony/inbox-to-action.git
 cd inbox-to-action
 pip install -r requirements.txt
 export ANTHROPIC_API_KEY="your-key-here"
