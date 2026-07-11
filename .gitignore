@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.env
+output/*
+!output/example_digest.md
+.DS_Store

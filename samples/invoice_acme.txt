@@ -1,0 +1,13 @@
+ACME OFFICE SUPPLIES LTD
+Invoice No: INV-2026-0783
+Date: 2026-07-01
+Bill to: Your Company Ltd
+
+Qty  Item                        Price
+12   A4 Paper (box)              €58.80
+2    Toner cartridge HP 26X      €178.00
+1    Delivery                    €12.50
+
+TOTAL DUE: €249.30
+Payment terms: 14 days from invoice date (due 2026-07-15)
+IBAN: IE29 AIBK 9311 5212 3456 78
