@@ -1,8 +1,9 @@
 """
 Inbox-to-Action: AI document triage tool.
 
-Day 1-2 state: .txt/.md triage works end to end — one file in, validated
-JSON out. Still TODO: PDF extraction (Day 3) and the Markdown digest (Day 4).
+Day 3 state: .txt/.md/.pdf files are extracted and triaged end to end,
+and a corrupt file is skipped without killing the batch. Still TODO:
+the Markdown digest (Day 4).
 
 Usage:
     python src/triage.py --input samples/ --output output/digest.md
@@ -15,6 +16,7 @@ import os
 from pathlib import Path
 
 import anthropic
+from pypdf import PasswordType, PdfReader
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -45,13 +47,42 @@ def load_prompt_template() -> str:
 
 
 def extract_text(filepath: Path) -> str:
-    """Return plain text from a .txt or .md file.
+    """Return plain text from a .txt, .md, or .pdf file.
 
-    TODO (Day 3): add .pdf support with pypdf's PdfReader.
+    This function is the single translation boundary for file-format
+    errors: every pypdf failure is converted to ValueError here, so the
+    main loop's except (ValueError, OSError) never has to know pypdf exists.
     """
     suffix = filepath.suffix.lower()
     if suffix in {".txt", ".md"}:
         return filepath.read_text(encoding="utf-8")
+    if suffix == ".pdf":
+        try:
+            # strict=False (the default) tolerates minor spec violations —
+            # real-world PDFs are messy and we'd rather get the text than be pedantic.
+            reader = PdfReader(filepath)
+            if reader.is_encrypted:
+                # Many "protected" PDFs use an empty user password (print
+                # restrictions only) — try that before giving up.
+                if reader.decrypt("") == PasswordType.NOT_DECRYPTED:
+                    raise ValueError(f"{filepath.name} is password-protected")
+            # extract_text() never raises for image-only pages — it returns "",
+            # so joining and checking for emptiness is the scanned-PDF detector.
+            text = "\n".join(page.extract_text() for page in reader.pages).strip()
+        except ValueError:
+            # Our own password-protected error above — already in the main
+            # loop's contract, so let it through untouched.
+            raise
+        except Exception as e:
+            # Deliberately broad: this function is the documented translation
+            # boundary, and pypdf raises outside its own hierarchy (e.g. bare
+            # NotImplementedError for unsupported encryption schemes). A
+            # boundary that only translates the failures we predicted would
+            # still let one weird PDF kill the whole batch.
+            raise ValueError(f"unreadable PDF ({type(e).__name__}: {e})") from e
+        if not text:
+            raise ValueError("no extractable text — scanned/image-only PDF?")
+        return text
     # Unknown extension: raise so the caller can skip this file with a
     # warning instead of sending garbage (or crashing) mid-batch.
     raise ValueError(f"Unsupported file type: {suffix}")
@@ -172,12 +203,19 @@ def main() -> None:
     results: list[dict] = []
     # sorted() makes runs deterministic — easier to eyeball and to test.
     for filepath in sorted(Path(args.input).iterdir()):
+        if filepath.name.startswith("."):  # .DS_Store etc. — macOS drops these everywhere
+            # debug, not warning: dotfiles are almost never real documents,
+            # but a trace should exist for the rare .report.pdf case.
+            logger.debug("Skipping dotfile %s", filepath.name)
+            continue
         if not filepath.is_file():
             continue
         try:
             text = extract_text(filepath)
         except (ValueError, OSError) as e:
             # One unreadable file must never kill the batch: warn and move on.
+            # TODO (Day 4/5): once build_digest() exists, turn extraction
+            # failures into "needs human review" records instead of skipping.
             logger.warning("Skipping %s: %s", filepath.name, e)
             continue
         results.append(triage_document(client, prompt_template, filepath.name, text))
