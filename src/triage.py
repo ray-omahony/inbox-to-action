@@ -138,6 +138,11 @@ def triage_document(
                 "",
             )
             result = json.loads(raw)
+            if not isinstance(result, dict):
+                # json.loads accepts arrays, strings, numbers... the model must give
+                # us an OBJECT. Raise ValueError so the existing retry/flag policy
+                # applies — same failure family as "missing keys".
+                raise ValueError(f"expected a JSON object, got {type(result).__name__}")
 
             # Trust but verify: an LLM can return valid JSON that's still
             # missing fields. Catch that here, not deep in the digest code.
@@ -192,6 +197,13 @@ def main() -> None:
     parser.add_argument("--output", required=True, help="Digest output path")
     args = parser.parse_args()
 
+    input_dir = Path(args.input)
+    if not input_dir.is_dir():
+        # is_dir() is False for both "doesn't exist" and "is a file" —
+        # one check covers both user mistakes.
+        logger.error("Input path %s is not a directory (or doesn't exist).", args.input)
+        raise SystemExit(1)
+
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         logger.error("Set the ANTHROPIC_API_KEY environment variable first.")
@@ -202,7 +214,7 @@ def main() -> None:
 
     results: list[dict] = []
     # sorted() makes runs deterministic — easier to eyeball and to test.
-    for filepath in sorted(Path(args.input).iterdir()):
+    for filepath in sorted(input_dir.iterdir()):
         if filepath.name.startswith("."):  # .DS_Store etc. — macOS drops these everywhere
             # debug, not warning: dotfiles are almost never real documents,
             # but a trace should exist for the rare .report.pdf case.
