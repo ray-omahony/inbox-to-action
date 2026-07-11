@@ -1,10 +1,8 @@
 """
 Inbox-to-Action: AI document triage tool.
 
-This is a SKELETON. Build it step by step with Claude Code — the structure
-and TODOs below are your roadmap. Writing it yourself (with Claude Code
-explaining each part) is the point: you'll be able to defend every line
-in a client call.
+Day 1-2 state: .txt/.md triage works end to end — one file in, validated
+JSON out. Still TODO: PDF extraction (Day 3) and the Markdown digest (Day 4).
 
 Usage:
     python src/triage.py --input samples/ --output output/digest.md
@@ -16,9 +14,7 @@ import logging
 import os
 from pathlib import Path
 
-# TODO (Day 1): pip install anthropic pypdf, then import them here
-# from anthropic import Anthropic
-# from pypdf import PdfReader
+import anthropic
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -28,41 +24,123 @@ REQUIRED_KEYS = {
     "suggested_action", "key_dates", "confidence",
 }
 
+MODEL = "claude-opus-4-8"
+# Pricing per million tokens (input, output) — used only for the cost log.
+# Check https://platform.claude.com/docs/en/pricing if you change MODEL.
+INPUT_PRICE_PER_MTOK = 5.00
+OUTPUT_PRICE_PER_MTOK = 25.00
+
+# Resolve the prompt path relative to THIS file, not the current working
+# directory — so the script works no matter where you run it from.
+PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "triage_prompt.md"
+
 
 def load_prompt_template() -> str:
     """Load the triage prompt from prompts/triage_prompt.md.
 
-    TODO (Day 1): read the file and return its contents.
     Why a separate file? So you can improve the prompt without touching
     code — and show clients your 'prompt engineering' is maintainable.
     """
-    raise NotImplementedError
+    return PROMPT_PATH.read_text(encoding="utf-8")
 
 
 def extract_text(filepath: Path) -> str:
-    """Return plain text from a .pdf, .txt, or .md file.
+    """Return plain text from a .txt or .md file.
 
-    TODO (Day 3): 
-    - .txt / .md -> just read the file
-    - .pdf -> use pypdf's PdfReader, join text from all pages
-    - unknown extension -> raise ValueError (caller will skip + warn)
+    TODO (Day 3): add .pdf support with pypdf's PdfReader.
     """
-    raise NotImplementedError
+    suffix = filepath.suffix.lower()
+    if suffix in {".txt", ".md"}:
+        return filepath.read_text(encoding="utf-8")
+    # Unknown extension: raise so the caller can skip this file with a
+    # warning instead of sending garbage (or crashing) mid-batch.
+    raise ValueError(f"Unsupported file type: {suffix}")
 
 
-def triage_document(client, prompt_template: str, filename: str, text: str) -> dict:
+def fill_template(template: str, filename: str, text: str) -> str:
+    """Substitute {filename} and {document_text} into the prompt.
+
+    We deliberately do NOT use str.format() here: the template contains a
+    literal JSON example full of { } braces, which format() would try to
+    interpret as placeholders and crash with a KeyError. Plain .replace()
+    only touches the two exact placeholders we care about.
+    """
+    return template.replace("{filename}", filename).replace("{document_text}", text)
+
+
+def triage_document(
+    client: anthropic.Anthropic, prompt_template: str, filename: str, text: str
+) -> dict:
     """Send one document to Claude, return validated triage JSON.
 
-    TODO (Day 1-2):
-    - Fill the template's {filename} and {document_text} placeholders
-    - Call client.messages.create(...) — check the current recommended
-      model at https://docs.claude.com/en/docs/about-claude/models
-    - Parse response as JSON
-    - Validate all REQUIRED_KEYS are present
-    - On failure: retry ONCE, then return a 'needs human review' record
-    - Log input/output tokens from the API response for cost tracking
+    Failure policy (from CLAUDE.md): one retry, then return a
+    'needs human review' record — a bad response must never crash the batch
+    or be silently dropped.
     """
-    raise NotImplementedError
+    prompt = fill_template(prompt_template, filename, text)
+
+    last_error = "unknown"
+    for attempt in (1, 2):
+        try:
+            response = client.messages.create(
+                model=MODEL,
+                max_tokens=1024,  # triage JSON is small; no need for more
+                messages=[{"role": "user", "content": prompt}],
+            )
+
+            # Cost visibility: the API reports exact token counts on every
+            # response, so we log real numbers instead of guessing.
+            usage = response.usage
+            cost = (
+                usage.input_tokens * INPUT_PRICE_PER_MTOK
+                + usage.output_tokens * OUTPUT_PRICE_PER_MTOK
+            ) / 1_000_000
+            logger.info(
+                "%s: %d in / %d out tokens, ~$%.4f",
+                filename, usage.input_tokens, usage.output_tokens, cost,
+            )
+
+            # response.content is a LIST of blocks (text, tool_use, ...).
+            # Pull out the first text block rather than assuming content[0].
+            raw = next(
+                (block.text for block in response.content if block.type == "text"),
+                "",
+            )
+            result = json.loads(raw)
+
+            # Trust but verify: an LLM can return valid JSON that's still
+            # missing fields. Catch that here, not deep in the digest code.
+            missing = REQUIRED_KEYS - result.keys()
+            if missing:
+                raise ValueError(f"response missing keys: {sorted(missing)}")
+
+            result["filename"] = filename
+            result["cost_usd"] = round(cost, 4)
+            result["input_tokens"] = usage.input_tokens
+            result["output_tokens"] = usage.output_tokens
+            return result
+
+        # Two failure families, one policy: API errors (network, rate limit,
+        # server) and bad-response errors (invalid JSON, missing keys) both
+        # get one retry. Anything else is a real bug and should crash loudly.
+        except (anthropic.APIError, json.JSONDecodeError, ValueError) as e:
+            last_error = f"{type(e).__name__}: {e}"
+            logger.warning("%s: attempt %d failed — %s", filename, attempt, last_error)
+
+    logger.error("%s: giving up after retry, flagging for human review", filename)
+    return {
+        "filename": filename,
+        "summary": f"Could not triage automatically ({last_error})",
+        "category": "other",
+        "urgency": "high",  # unknown docs get looked at first, not lost
+        "urgency_reason": "Automatic triage failed — needs human review.",
+        "suggested_action": "Review this document manually.",
+        "key_dates": [],
+        "confidence": "low",
+        "cost_usd": 0.0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+    }
 
 
 def build_digest(results: list[dict]) -> str:
@@ -88,17 +166,26 @@ def main() -> None:
         logger.error("Set the ANTHROPIC_API_KEY environment variable first.")
         raise SystemExit(1)
 
-    # TODO (Day 2-3): 
-    # 1. client = Anthropic()  (reads the env var automatically)
-    # 2. prompt_template = load_prompt_template()
-    # 3. Loop over files in args.input:
-    #    - extract_text() in try/except — skip bad files with a warning,
-    #      never let one corrupt PDF kill the whole batch
-    #    - triage_document() and collect results
-    # 4. digest = build_digest(results)
-    # 5. Write digest to args.output, log the path
+    client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY automatically
+    prompt_template = load_prompt_template()
 
-    logger.info("Skeleton ready — build me with Claude Code!")
+    results: list[dict] = []
+    # sorted() makes runs deterministic — easier to eyeball and to test.
+    for filepath in sorted(Path(args.input).iterdir()):
+        if not filepath.is_file():
+            continue
+        try:
+            text = extract_text(filepath)
+        except (ValueError, OSError) as e:
+            # One unreadable file must never kill the batch: warn and move on.
+            logger.warning("Skipping %s: %s", filepath.name, e)
+            continue
+        results.append(triage_document(client, prompt_template, filepath.name, text))
+
+    # Day 1-2 output: print the raw JSON so we can verify the core works.
+    # Day 4 replaces this with build_digest() written to args.output.
+    print(json.dumps(results, indent=2, ensure_ascii=False))
+    logger.info("Processed %d document(s). Digest (Day 4) not built yet.", len(results))
 
 
 if __name__ == "__main__":

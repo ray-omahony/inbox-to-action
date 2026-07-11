@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
+.venv/
 .env
 output/*
 !output/example_digest.md
