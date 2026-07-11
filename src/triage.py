@@ -1,9 +1,10 @@
 """
 Inbox-to-Action: AI document triage tool.
 
-Day 3 state: .txt/.md/.pdf files are extracted and triaged end to end,
-and a corrupt file is skipped without killing the batch. Still TODO:
-the Markdown digest (Day 4).
+Reads .txt/.md/.pdf files from an input folder, triages each with the
+Claude API, and writes a Markdown digest sorted by urgency. Files that
+can't be read or triaged appear in the digest as "needs human review"
+items instead of vanishing.
 
 Usage:
     python src/triage.py --input samples/ --output output/digest.md
@@ -293,17 +294,21 @@ def main() -> None:
         try:
             text = extract_text(filepath)
         except (ValueError, OSError) as e:
-            # One unreadable file must never kill the batch: warn and move on.
-            # TODO (Day 4/5): once build_digest() exists, turn extraction
-            # failures into "needs human review" records instead of skipping.
-            logger.warning("Skipping %s: %s", filepath.name, e)
+            # One unreadable file must never kill the batch — and it must not
+            # vanish either: it goes into the digest as a review item.
+            logger.warning("Flagging %s for human review: %s", filepath.name, e)
+            results.append(review_record(filepath.name, str(e)))
             continue
         results.append(triage_document(client, prompt_template, filepath.name, text))
 
-    # Day 1-2 output: print the raw JSON so we can verify the core works.
-    # Day 4 replaces this with build_digest() written to args.output.
-    print(json.dumps(results, indent=2, ensure_ascii=False))
-    logger.info("Processed %d document(s). Digest (Day 4) not built yet.", len(results))
+    digest = build_digest(results)
+    output_path = Path(args.output)
+    # Create the parent dir if missing. exist_ok=True makes this a no-op
+    # when it already exists — no check-then-create race, one line.
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(digest, encoding="utf-8")
+    logger.info("Processed %d document(s); digest written to %s", len(results), output_path)
+    print(f"Digest written to {output_path}")
 
 
 if __name__ == "__main__":
