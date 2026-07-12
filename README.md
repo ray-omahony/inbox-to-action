@@ -19,14 +19,14 @@ For every document in a folder, Inbox-to-Action produces:
 | **Urgency** | 🔴 High / 🟡 Medium / 🟢 Low |
 | **Suggested action** | "Forward to accounts payable before Friday." |
 
-Then it compiles everything into a single **daily digest** (Markdown or HTML) you can read in two minutes.
+Then it compiles everything into a single **daily digest** (Markdown) you can read in two minutes.
 
 ## Why it's useful
 
 - **Processes 50 documents in ~2 minutes** instead of an hour of manual reading
-- **Costs roughly €0.01–0.03 per document** to run (Claude API)
+- **Costs under a cent per document** — measured $0.007–0.009/doc with Claude Opus 4.8; every run logs its exact token usage and cost
 - **Nothing leaves your machine** except the document text sent to the API — no third-party SaaS, no subscriptions
-- Works on `.pdf`, `.txt`, `.md`, and `.eml` files
+- Works on `.pdf`, `.txt`, and `.md` files
 
 ## Quick start
 
@@ -65,6 +65,7 @@ python src/triage.py --input samples/ --output output/digest.md
 ## Roadmap
 
 - [ ] MCP server wrapper so Claude Desktop can triage folders directly
+- [ ] `.eml` email file support
 - [ ] Email inbox integration (IMAP)
 - [ ] Configurable categories per client
 
