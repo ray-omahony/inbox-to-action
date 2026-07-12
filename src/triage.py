@@ -177,7 +177,17 @@ def triage_document(
             missing = REQUIRED_KEYS - result.keys()
             if missing:
                 raise ValueError(f"response missing keys: {sorted(missing)}")
+            # urgency drives the digest's sort key, where a non-string
+            # (e.g. ["high"]) would crash AFTER all the API money is spent.
+            if not isinstance(result["urgency"], str):
+                raise ValueError(
+                    f"urgency must be a string, got {type(result['urgency']).__name__}"
+                )
 
+            # Bookkeeping fields are OURS — overwrite them all so a document
+            # can't steer the model into spoofing them (needs_review would
+            # fake the digest's human-review banner).
+            result["needs_review"] = False
             result["filename"] = filename
             result["cost_usd"] = round(cost, 4)
             result["input_tokens"] = usage.input_tokens
