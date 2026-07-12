@@ -159,6 +159,11 @@ def triage_document(
                 filename, usage.input_tokens, usage.output_tokens, cost,
             )
 
+            if response.stop_reason == "max_tokens":
+                # A truncated response would fail below as "invalid JSON",
+                # sending a human chasing the wrong cause — name the real one.
+                raise ValueError("response truncated at the max_tokens limit")
+
             # response.content is a LIST of blocks (text, tool_use, ...).
             # Pull out the first text block rather than assuming content[0].
             raw = next(
@@ -246,14 +251,20 @@ def build_digest(results: list[dict]) -> str:
         lines.append(f"- **Suggested action:** {result['suggested_action']}")
         dates = result["key_dates"]
         # Key PRESENCE is validated, but the model could still return a
-        # string — and ", ".join() on a string prints one char per comma.
-        key_dates = (
-            ", ".join(str(d) for d in dates)
-            if isinstance(dates, list) and dates
-            else "none"
-        )
+        # string — render it as-is rather than ", ".join()ing it into
+        # one-char-per-comma soup or silently dropping a real date.
+        if isinstance(dates, list) and dates:
+            key_dates = ", ".join(str(d) for d in dates)
+        elif isinstance(dates, str) and dates.strip():
+            key_dates = dates
+        else:
+            key_dates = "none"
         lines.append(f"- **Key dates:** {key_dates}")
         lines.append("")
+        # TODO: model-authored fields go into the Markdown verbatim — fine
+        # for your own inbox, but escape or indent them before pointing this
+        # at untrusted third-party documents (a crafted document could make
+        # the model emit text that fakes extra digest sections).
 
     # .get() defaults so a record missing bookkeeping keys degrades to
     # zero instead of crashing the whole digest.
@@ -263,10 +274,17 @@ def build_digest(results: list[dict]) -> str:
     total_cost = sum(r.get("cost_usd", 0.0) for r in results)
     lines.append("---")
     lines.append("")
-    lines.append(
-        f"*{len(results)} documents processed · {total_tokens} tokens · "
-        f"estimated cost ${total_cost:.4f}*"
-    )
+    parts = [
+        f"{len(results)} document{'' if len(results) == 1 else 's'} processed",
+        f"{total_tokens} tokens",
+        f"estimated cost ${total_cost:.4f}",
+    ]
+    # Surface failures in the footer too — "5 processed" alone oversells a
+    # run where some documents couldn't actually be triaged.
+    needs_review = sum(1 for r in results if r.get("needs_review", False))
+    if needs_review:
+        parts.append(f"{needs_review} need{'s' if needs_review == 1 else ''} review")
+    lines.append("*" + " · ".join(parts) + "*")
     return "\n".join(lines) + "\n"
 
 
@@ -288,6 +306,12 @@ def main() -> None:
         logger.error("Set the ANTHROPIC_API_KEY environment variable first.")
         raise SystemExit(1)
 
+    # Retry ownership, decided deliberately: the SDK keeps its default
+    # max_retries=2 for TRANSPORT faults (429/5xx/network) because it honors
+    # the server's retry-after header with backoff — our loop can't do that.
+    # triage_document's single retry owns BAD RESPONSES (invalid/truncated
+    # JSON, missing keys). Worst case is therefore 2×3 = 6 HTTP attempts
+    # per document before it gets flagged for human review.
     client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY automatically
     prompt_template = load_prompt_template()
 
