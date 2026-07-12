@@ -12,7 +12,7 @@ Ray — experienced infrastructure/ops engineer (Linux, AWS, monitoring), **lear
 
 ## Tech constraints
 - Python 3.11+, standard library where possible
-- Dependencies: `anthropic`, `pypdf` only (keep it lean)
+- Dependencies: `anthropic`, `pypdf`, `mcp` (server wrapper) only — keep it lean
 - API key from `ANTHROPIC_API_KEY` env var — NEVER hardcode keys
 - The triage prompt lives in `prompts/triage_prompt.md` — load it from the file, don't embed it in code
 
@@ -25,9 +25,11 @@ Ray — experienced infrastructure/ops engineer (Linux, AWS, monitoring), **lear
 
 ## Project structure
 ```
-src/triage.py        # main CLI script
+src/triage.py        # main CLI script (also the engine the MCP server reuses)
+src/mcp_server.py    # MCP stdio server for Claude Desktop — stdout is protocol, never print()
 prompts/             # the LLM prompt (edit here, not in code)
 samples/             # test input files
+tests/               # pytest suite (offline, mocked API client)
 output/              # generated digests (gitignored except example)
 ```
 

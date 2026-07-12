@@ -62,9 +62,26 @@ python src/triage.py --input samples/ --output output/digest.md
 - **Per-document cost logging** — every run prints token usage and estimated cost, so there are no billing surprises
 - **Graceful failures** — a corrupt PDF skips with a warning; one bad file never kills the batch
 
+## Use it from Claude Desktop (MCP)
+
+The tool doubles as an [MCP](https://modelcontextprotocol.io) server, so Claude Desktop can triage a folder mid-conversation ("triage everything in ~/Desktop/inbox and tell me what's urgent"). Add to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "inbox-to-action": {
+      "command": "/bin/zsh",
+      "args": ["-c", "source ~/.zshrc 2>/dev/null; exec /path/to/inbox-to-action/.venv/bin/python /path/to/inbox-to-action/src/mcp_server.py"]
+    }
+  }
+}
+```
+
+The `zsh -c 'source ~/.zshrc; ...'` wrapper matters: MCP hosts launch servers with a minimal environment, so the `ANTHROPIC_API_KEY` from your shell profile must be loaded by the launch command itself.
+
 ## Roadmap
 
-- [ ] MCP server wrapper so Claude Desktop can triage folders directly
+- [x] MCP server wrapper so Claude Desktop can triage folders directly
 - [ ] `.eml` email file support
 - [ ] Email inbox integration (IMAP)
 - [ ] Configurable categories per client

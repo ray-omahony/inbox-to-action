@@ -110,6 +110,21 @@ def test_corrupt_pdf_raises_value_error_only():
         triage.extract_text(SAMPLES / "corrupt.pdf")
 
 
+# --- triage_folder: the shared CLI/MCP pipeline ---------------------------
+
+
+def test_triage_folder_mixes_success_and_review(tmp_path):
+    (tmp_path / "good.txt").write_text("An invoice for 100 euro due soon.")
+    (tmp_path / "bad.xyz").write_text("unsupported extension")
+    (tmp_path / ".DS_Store").write_text("macos noise")
+    client = make_client(valid_payload())
+    results = triage.triage_folder(client, tmp_path)
+    by_name = {r["filename"]: r for r in results}
+    assert set(by_name) == {"good.txt", "bad.xyz"}  # dotfile skipped
+    assert by_name["good.txt"]["needs_review"] is False
+    assert by_name["bad.xyz"]["needs_review"] is True  # flagged, not dropped
+
+
 # --- build_digest: rendering must survive whatever reaches it ------------
 
 

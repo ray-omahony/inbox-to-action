@@ -299,6 +299,37 @@ def build_digest(results: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def triage_folder(client: anthropic.Anthropic, input_dir: Path) -> list[dict]:
+    """Extract and triage every document in a folder.
+
+    Shared by the CLI (main) and the MCP server (src/mcp_server.py), so
+    both entry points get identical behavior: bad files become review
+    records, never crashes, one result dict per document.
+    """
+    prompt_template = load_prompt_template()
+
+    results: list[dict] = []
+    # sorted() makes runs deterministic — easier to eyeball and to test.
+    for filepath in sorted(input_dir.iterdir()):
+        if filepath.name.startswith("."):  # .DS_Store etc. — macOS drops these everywhere
+            # debug, not warning: dotfiles are almost never real documents,
+            # but a trace should exist for the rare .report.pdf case.
+            logger.debug("Skipping dotfile %s", filepath.name)
+            continue
+        if not filepath.is_file():
+            continue
+        try:
+            text = extract_text(filepath)
+        except (ValueError, OSError) as e:
+            # One unreadable file must never kill the batch — and it must not
+            # vanish either: it goes into the digest as a review item.
+            logger.warning("Flagging %s for human review: %s", filepath.name, e)
+            results.append(review_record(filepath.name, str(e)))
+            continue
+        results.append(triage_document(client, prompt_template, filepath.name, text))
+    return results
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="AI document triage")
     parser.add_argument("--input", required=True, help="Folder of documents")
@@ -324,27 +355,8 @@ def main() -> None:
     # JSON, missing keys). Worst case is therefore 2×3 = 6 HTTP attempts
     # per document before it gets flagged for human review.
     client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY automatically
-    prompt_template = load_prompt_template()
 
-    results: list[dict] = []
-    # sorted() makes runs deterministic — easier to eyeball and to test.
-    for filepath in sorted(input_dir.iterdir()):
-        if filepath.name.startswith("."):  # .DS_Store etc. — macOS drops these everywhere
-            # debug, not warning: dotfiles are almost never real documents,
-            # but a trace should exist for the rare .report.pdf case.
-            logger.debug("Skipping dotfile %s", filepath.name)
-            continue
-        if not filepath.is_file():
-            continue
-        try:
-            text = extract_text(filepath)
-        except (ValueError, OSError) as e:
-            # One unreadable file must never kill the batch — and it must not
-            # vanish either: it goes into the digest as a review item.
-            logger.warning("Flagging %s for human review: %s", filepath.name, e)
-            results.append(review_record(filepath.name, str(e)))
-            continue
-        results.append(triage_document(client, prompt_template, filepath.name, text))
+    results = triage_folder(client, input_dir)
 
     digest = build_digest(results)
     output_path = Path(args.output)
