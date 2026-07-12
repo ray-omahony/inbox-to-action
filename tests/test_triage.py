@@ -81,6 +81,27 @@ def test_model_cannot_spoof_needs_review():
     assert result["needs_review"] is False  # bookkeeping fields are ours
 
 
+# --- fill_template: prompt assembly --------------------------------------
+
+
+def test_fill_template_substitutes_today_and_keeps_json_braces():
+    from datetime import date
+
+    template = 'Today is {today}. {"example": "braces survive"} File: {filename}\n{document_text}'
+    filled = triage.fill_template(template, "a.txt", "hello")
+    assert date.today().isoformat() in filled
+    assert '{"example": "braces survive"}' in filled  # str.format would choke here
+    assert "{today}" not in filled and "{filename}" not in filled
+
+
+def test_prompt_file_contains_all_placeholders():
+    # The template lives outside the code — this catches someone editing
+    # the .md file and breaking the contract fill_template relies on.
+    template = triage.load_prompt_template()
+    for placeholder in ("{today}", "{filename}", "{document_text}"):
+        assert placeholder in template
+
+
 # --- extract_text: the translation boundary ------------------------------
 
 

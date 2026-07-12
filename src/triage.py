@@ -22,6 +22,9 @@ from pypdf import PasswordType, PdfReader
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
+# pypdf logs its own parse complaints ("EOF marker not found") at WARNING
+# while we're already handling the failure — keep only its real errors.
+logging.getLogger("pypdf").setLevel(logging.ERROR)
 
 REQUIRED_KEYS = {
     "summary", "category", "urgency", "urgency_reason",
@@ -94,14 +97,22 @@ def extract_text(filepath: Path) -> str:
 
 
 def fill_template(template: str, filename: str, text: str) -> str:
-    """Substitute {filename} and {document_text} into the prompt.
+    """Substitute {today}, {filename} and {document_text} into the prompt.
 
     We deliberately do NOT use str.format() here: the template contains a
     literal JSON example full of { } braces, which format() would try to
     interpret as placeholders and crash with a KeyError. Plain .replace()
-    only touches the two exact placeholders we care about.
+    only touches the exact placeholders we care about.
+
+    {today} exists because the model has no clock: without it, urgency
+    windows ("due within 7 days") and partial dates ("Friday the 17th")
+    get judged against a guessed date — we saw it invent the wrong year.
     """
-    return template.replace("{filename}", filename).replace("{document_text}", text)
+    return (
+        template.replace("{today}", date.today().isoformat())
+        .replace("{filename}", filename)
+        .replace("{document_text}", text)
+    )
 
 
 def review_record(filename: str, reason: str) -> dict:
